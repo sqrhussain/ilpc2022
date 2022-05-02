@@ -1,0 +1,14 @@
+nohup: ignoring input
+WARNING:pykeen.triples.triples_factory:Reconstructing all label-based triples. This is expensive and rarely needed.
+WARNING:pykeen.triples.triples_factory:Reconstructing all label-based triples. This is expensive and rarely needed.
+WARNING:pykeen.triples.triples_factory:Reconstructing all label-based triples. This is expensive and rarely needed.
+cpu
+Evaluating on cpu:   0%|          | 0.00/2.90k [00:00<?, ?triple/s]Evaluating on cpu:   9%|▉         | 256/2.90k [08:45<1:30:32, 2.05s/triple]Evaluating on cpu:  18%|█▊        | 512/2.90k [17:17<1:20:29, 2.02s/triple]Evaluating on cpu:  26%|██▋       | 768/2.90k [24:41<1:07:14, 1.89s/triple]Evaluating on cpu:  35%|███▌      | 1.02k/2.90k [36:41<1:10:33, 2.25s/triple]Evaluating on cpu:  44%|████▍     | 1.28k/2.90k [48:51<1:06:46, 2.47s/triple]Evaluating on cpu:  53%|█████▎    | 1.54k/2.90k [59:15<55:59, 2.46s/triple]  Evaluating on cpu:  62%|██████▏   | 1.79k/2.90k [1:08:33<43:48, 2.37s/triple]Evaluating on cpu:  71%|███████   | 2.05k/2.90k [1:16:34<31:29, 2.21s/triple]Evaluating on cpu:  79%|███████▉  | 2.30k/2.90k [1:27:45<23:19, 2.34s/triple]Evaluating on cpu:  88%|████████▊ | 2.56k/2.90k [1:38:31<13:39, 2.40s/triple]Evaluating on cpu:  97%|█████████▋| 2.82k/2.90k [1:46:57<03:15, 2.27s/triple]Evaluating on cpu: 100%|██████████| 2.90k/2.90k [1:50:11<00:00, 2.27s/triple]Evaluating on cpu: 100%|██████████| 2.90k/2.90k [1:50:11<00:00, 2.28s/triple]
+INFO:pykeen.evaluation.evaluator:Evaluation took 6611.49s seconds
+INFO:root:Test MRR       : 0.00704
+INFO:root:Test Hits@100  : 0.07478
+INFO:root:Test Hits@10   : 0.01947
+INFO:root:Test Hits@5    : 0.00913
+INFO:root:Test Hits@3    : 0.00500
+INFO:root:Test Hits@1    : 0.00000
+INFO:root:Test AMRI      : 0.07300
