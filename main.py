@@ -8,6 +8,7 @@ import torch
 from pykeen.evaluation import RankBasedEvaluator
 from pykeen.losses import NSSALoss
 from pykeen.models.inductive import InductiveNodePiece, InductiveNodePieceGNN
+from InductiveRGCN import InductiveRGCN
 from pykeen.trackers import ConsoleResultTracker, WANDBResultTracker
 from pykeen.training import SLCWATrainingLoop
 from pykeen.typing import TESTING, TRAINING, VALIDATION
@@ -131,8 +132,8 @@ def main(
     # the GNN version uses a 2-layer CompGCN message passing encoder on the training / inference graphs
     # but feel free to create and attach your own GNN encoder via the gnn_encoder argument
     # and new inductive link prediction models in general
-    model_cls = InductiveNodePieceGNN if gnn else InductiveNodePiece
-    model = model_cls(
+
+    model = InductiveRGCN(
         embedding_dim=embedding_dim,
         triples_factory=dataset.transductive_training,
         inference_factory=dataset.inductive_inference,
