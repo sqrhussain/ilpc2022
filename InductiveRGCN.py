@@ -35,8 +35,7 @@ class InductiveRGCN(InductiveNodePiece):
 
     def __init__(
         self,
-        *,
-        gnn_encoder: Optional[Iterable[nn.Module]] = None,
+        # *,
         **kwargs,
     ) -> None:
         """
@@ -60,28 +59,26 @@ class InductiveRGCN(InductiveNodePiece):
         dim = self.entity_representations[0].shape[0]
         self.rogcn = RoGCNLayer(input_dim=dim,output_dim=dim,activation=torch.nn.ReLU,num_relations=train_factory.num_relations)
 
-        if gnn_encoder is None:
-            # default composition is DistMult-style
-            dim = self.entity_representations[0].shape[0]
-            # gnn_encoder = [
-            #     CompGCNLayer(
-            #         input_dim=dim,
-            #         output_dim=dim,
-            #         activation=torch.nn.ReLU,
-            #         dropout=0.1,
-            #     )
-            #     for layer in range(1)
-            # ]
-            gnn_encoder = [
-                RGCNLayer(
-                    input_dim=dim,
-                    num_relations=train_factory.num_relations,
-                    output_dim=dim,
-                    activation=torch.nn.ReLU,
-                )
-                for layer in range(1)
-            ]
-        self.gnn_encoder = nn.ModuleList(gnn_encoder)
+        dim = self.entity_representations[0].shape[0]
+        self.rgcn_encoder = nn.ModuleList([
+            RGCNLayer(
+                input_dim=dim,
+                num_relations=train_factory.num_relations,
+                output_dim=dim,
+                activation=torch.nn.ReLU,
+            )
+            for layer in range(2)
+        ])
+
+        self.compgcn_encoder = nn.ModuleList([
+            CompGCNLayer(
+                input_dim=dim,
+                output_dim=dim,
+                activation=torch.nn.ReLU,
+                dropout=0.1,
+            )
+            for layer in range(0)
+        ])
 
         # Saving edge indices for all the supplied splits
         assert train_factory is not None, "train_factory must be a valid triples factory"
@@ -108,8 +105,12 @@ class InductiveRGCN(InductiveNodePiece):
     def reset_parameters_(self):
         """Reset the GNN encoder explicitly in addition to other params."""
         super().reset_parameters_()
-        if getattr(self, "gnn_encoder", None) is not None:
-            for layer in self.gnn_encoder:
+        if getattr(self, "compgcn_encoder", None) is not None:
+            for layer in self.compgcn_encoder:
+                if hasattr(layer, "reset_parameters"):
+                    layer.reset_parameters()
+        if getattr(self, "rgcn_encoder", None) is not None:
+            for layer in self.rgcn_encoder:
                 if hasattr(layer, "reset_parameters"):
                     layer.reset_parameters()
 
@@ -133,21 +134,21 @@ class InductiveRGCN(InductiveNodePiece):
         x_e, x_r = self.rogcn(self.num_entities, source=edge_index[0,:],target=edge_index[1,:],edge_type=edge_type), self.rogcn.relation_representation() # Not sure about this
 
         # Perform message passing and get updated states
-        # for layer in self.gnn_encoder:
-        #     x_e, x_r = layer(
-        #         x_e=x_e,
-        #         x_r=x_r,
-        #         edge_index=getattr(self, f"{mode}_edge_index"),
-        #         edge_type=getattr(self, f"{mode}_edge_type"),
-        #     )
-        # print(h)
-        for layer in self.gnn_encoder:
+        for layer in self.rgcn_encoder:
             x_e = layer(
                 x=x_e,
                 # x_r=x_r,
                 # source=h,target=t,edge_type=r,
                 source=edge_index[0,:],target=edge_index[1,:],edge_type=edge_type,
             )
+        for layer in self.compgcn_encoder:
+            x_e, x_r = layer(
+                x_e=x_e,
+                x_r=x_r,
+                edge_index=edge_index,
+                edge_type=edge_type,
+            )
+        # print(h)
         # print(x_e.shape)
         # print(x_r.shape)
 
