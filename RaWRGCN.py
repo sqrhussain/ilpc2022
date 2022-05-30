@@ -14,7 +14,10 @@ from pykeen.triples import CoreTriplesFactory
 
 from pykeen.nn.message_passing import *
 
-class RoGCNLayer(nn.Module):
+import networkx as nx
+import numpy as np
+
+class RaWRGCNLayer(nn.Module):
     r"""
     An RGCN layer from [schlichtkrull2018]_ updated to match the official implementation.
     This layer uses separate decompositions for forward and backward edges (i.e., "normal" and implicitly created
@@ -39,6 +42,8 @@ class RoGCNLayer(nn.Module):
         num_relations: int,
         input_dim: int,
         output_dim: Optional[int] = None,
+        walk_length: int = 3,
+        walk_count: int = 10,
         use_bias: bool = True,
         weighted: bool = False,
         activation: Hint[nn.Module] = None,
@@ -51,6 +56,7 @@ class RoGCNLayer(nn.Module):
         Initialize the layer.
         :param input_dim: >0
             the input dimension (basically the relation representation size)
+            ignored if weighted==False (then we use output_dim as a relation representation size)
         :param num_relations:
             the number of relations
         :param output_dim: >0
@@ -69,30 +75,21 @@ class RoGCNLayer(nn.Module):
             the keyword-based arguments passed to the decomposition for instantiation
         """
         super().__init__()
-        # cf. https://github.com/MichSchli/RelationPrediction/blob/c77b094fe5c17685ed138dae9ae49b304e0d8d89/code/encoders/message_gcns/gcn_basis.py#L22-L24  # noqa: E501
-        # there are separate decompositions for forward and backward relations.
-        # the self-loop weight is not decomposed.
-        
-        # self.fwd = decomposition_resolver.make(
-        #     query=decomposition,
-        #     pos_kwargs=decomposition_kwargs,
-        #     input_dim=input_dim,
-        #     num_relations=num_relations,
-        # )
-        # output_dim = self.fwd.output_dim
-        # self.bwd = decomposition_resolver.make(
-        #     query=decomposition,
-        #     pos_kwargs=decomposition_kwargs,
-        #     input_dim=input_dim,
-        #     num_relations=num_relations,
-        # )
 
-        # TODO self.output_dim ?
+        if not weighted:
+            if output_dim is not None:
+                print("WARN: output_dim set back to input_dim*walk_length")
+            output_dim = input_dim*walk_length
 
-        self.relation_representation = Embedding(max_id=num_relations,
-            embedding_dim=input_dim) # TODO: Should this be the output dim? Probably always enforce weighted=True then it should be fine
+        self.relation_representation = Embedding(max_id=num_relations*2,
+            embedding_dim=input_dim if weighted else output_dim) # TODO: Should this be the output dim? Probably always enforce weighted=True then it should be fine
 
         self.num_relations = num_relations
+        print(f"This should be TWICE as many as it is in the docs 192=={num_relations}??")
+
+        self.walk_length = walk_length
+        self.walk_count = walk_count
+        print(f"for each node, get {self.walk_count} lists of {self.walk_length} relation ids by random walking")
 
         self.bias = nn.Parameter(torch.empty(output_dim)) if use_bias else None
         self.dropout = nn.Dropout(p=self_loop_dropout)
@@ -101,7 +98,7 @@ class RoGCNLayer(nn.Module):
         self.activation = activation
         self.weighted = weighted
         if self.weighted:
-            self.weight_matrix = nn.Parameter(torch.empty((input_dim,output_dim)))
+            self.weight_matrix = nn.Parameter(torch.empty((input_dim*walk_length,output_dim)))
 
     # docstr-coverage: inherited
     def reset_parameters(self):  # noqa: D102
@@ -110,6 +107,44 @@ class RoGCNLayer(nn.Module):
         if self.weighted is not None:
             # nn.init.zeros_(self.weight_matrix)
             nn.init.xavier_normal_(self.weight_matrix)
+
+
+    def get_random_walks(
+        self,
+        num_entities,
+        source,
+        target,
+        edge_type,
+    ):
+        # Build directed graph
+        print("Performing random walks")
+        G = nx.from_edgelist([(u.item(),v.item(),{"edge_type":r.item()}) for u,v,r in zip(source,target,edge_type)], create_using=nx.DiGraph)
+        G.add_edges_from([(v.item(),u.item(),{"edge_type":self.num_relations + r.item()}) for u,v,r in zip(source,target,edge_type)])
+        all_walks = []
+        mapping = []
+        
+        for entity in range(num_entities):
+            for i in range(self.walk_count):
+                u = entity
+                walk = []
+                for j in range(self.walk_length):
+                    # pick one neighbor randomly
+                    neighbors = list(G.neighbors(u))
+                    # if len(neighbors) == 0:
+                    #     print(u)
+                    #     break
+                    v = np.random.choice(neighbors)
+                    walk.append(G.edges[u,v]["edge_type"])
+                    u = v
+                all_walks.append(walk)
+                mapping.append([entity,i*self.walk_length+j])
+
+        mapping = np.array(mapping)
+        mapping = torch.sparse_coo_tensor(torch.tensor(mapping.T), torch.ones(len(mapping)), (num_entities,num_entities*self.walk_count), dtype=torch.float)
+        return all_walks,mapping
+
+
+
 
     def forward(
         self,
@@ -135,35 +170,20 @@ class RoGCNLayer(nn.Module):
             Enriched entity representations.
         """
 
-        # # self-loop
-        # y = self.dropout(x @ self.w_self_loop)
-        # # forward messages
-        # y = self.fwd(
-        #     x=x,
-        #     source=source,
-        #     target=target,
-        #     edge_type=edge_type,
-        #     edge_weights=edge_weights,
-        #     accumulator=y,
-        # )
-        # # backward messages
-        # y = self.bwd(
-        #     x=x,
-        #     source=target,
-        #     target=source,
-        #     edge_type=edge_type,
-        #     edge_weights=edge_weights,
-        #     accumulator=y,
-        # )
-        # num_entities = torch.max(torch.cat((source,target)),dim=-1)[0].item()+1
-        AdjM = torch.sparse_coo_tensor(torch.stack([source,edge_type]),torch.ones_like(source),(num_entities,self.num_relations),dtype=torch.float)
-        # print(AdjM.type())
-        D = torch.diag(1/(torch.sparse.sum(AdjM, dim=1).to_dense()+1))
-        # print(D)
-        y = torch.sparse.mm(AdjM,self.relation_representation())
-        y = D @ y
-        # print(y.shape)
+        # Build random walk. This should be of shape [num_entities*walk_count, walk_length]
+        # Also build entity-to-walk mapping within the same function. This should be of size [num_entities, num_entities*walk_count]
+        random_walk_ids, entity_walk_mapping = self.get_random_walks(num_entities,source,target,edge_type)
 
+        # Get vector representations of random walks
+        # this should be of shape [num_entities*walk_count, walk_length*input_dim]
+        random_walk_vecs = torch.tensor([torch.cat([self.relation_representation()[r] for r in walk]) for walk in random_walk_ids]) # TODO should we call forward here?
+
+        # Degree normalization matrix (in this code, this should be equivalent to dividing the final result by walk_count)
+        D = torch.diag(1/(torch.sparse.sum(entity_walk_mapping, dim=1).to_dense()+1))
+
+        # Multiplication: D * entity_walk_mapping * random_walk_vecs * weight
+        y = torch.sparse.mm(entity_walk_mapping,random_walk_vecs)
+        y = D @ y
         if self.weighted:
             y = y @ self.weight_matrix
         if self.bias is not None:

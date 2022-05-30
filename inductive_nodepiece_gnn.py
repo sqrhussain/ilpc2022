@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+"""A wrapper which combines an interaction function with NodePiece entity representations."""
 
 import logging
 from typing import Iterable, Optional, Tuple, cast
@@ -11,9 +12,7 @@ from pykeen.models.inductive import InductiveNodePiece
 from pykeen.nn.representation import CompGCNLayer
 from pykeen.nn.message_passing import RGCNLayer
 from pykeen.typing import HeadRepresentation, InductiveMode, RelationRepresentation, TailRepresentation
-
-from RoGCN import RoGCNLayer
-from RaWRGCN import RaWRGCNLayer
+from pykeen.utils import get_edge_index
 
 __all__ = [
     "InductiveNodePieceGNN",
@@ -22,8 +21,8 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
-class InductiveRGCN(InductiveNodePiece):
-    """Inductive version of CompGCN with one CompGCN layer on top of a RoGCN layer.
+class InductiveNodePieceGNN(InductiveNodePiece):
+    """Inductive NodePiece with a GNN encoder on top.
 
     Overall, it's a 3-step procedure:
 
@@ -37,6 +36,7 @@ class InductiveRGCN(InductiveNodePiece):
     def __init__(
         self,
         # *,
+        # gnn_encoder: Optional[Iterable[nn.Module]] = None,
         **kwargs,
     ) -> None:
         """
@@ -56,11 +56,6 @@ class InductiveRGCN(InductiveNodePiece):
             kwargs.get("test_factory"),
         )
 
-        self.num_entities = train_factory.num_entities
-        dim = self.entity_representations[0].shape[0]
-        # self.rogcn = RoGCNLayer(input_dim=dim,output_dim=dim,weighted=True,activation=torch.nn.ReLU,num_relations=train_factory.num_relations)
-        self.rogcn = RaWRGCNLayer(input_dim=dim,walk_length=3,walk_count=10,output_dim=dim,weighted=True,activation=torch.nn.ReLU,num_relations=train_factory.num_relations)
-
         dim = self.entity_representations[0].shape[0]
         self.rgcn_encoder = nn.ModuleList([
             RGCNLayer(
@@ -69,7 +64,7 @@ class InductiveRGCN(InductiveNodePiece):
                 output_dim=dim,
                 activation=torch.nn.ReLU,
             )
-            for layer in range(1)
+            for layer in range(2)
         ])
 
         self.compgcn_encoder = nn.ModuleList([
@@ -79,16 +74,16 @@ class InductiveRGCN(InductiveNodePiece):
                 activation=torch.nn.ReLU,
                 dropout=0.1,
             )
-            for layer in range(1)
+            for layer in range(0)
         ])
 
         # Saving edge indices for all the supplied splits
         assert train_factory is not None, "train_factory must be a valid triples factory"
-        self.register_buffer(name="training_edge_index", tensor=train_factory.mapped_triples[:, [0, 2]].t())
+        self.register_buffer(name="training_edge_index", tensor=get_edge_index(triples_factory=train_factory))
         self.register_buffer(name="training_edge_type", tensor=train_factory.mapped_triples[:, 1])
 
         if inference_factory is not None:
-            inference_edge_index = inference_factory.mapped_triples[:, [0, 2]].t()
+            inference_edge_index = get_edge_index(triples_factory=inference_factory)
             inference_edge_type = inference_factory.mapped_triples[:, 1]
 
             self.register_buffer(name="validation_edge_index", tensor=inference_edge_index)
@@ -99,9 +94,11 @@ class InductiveRGCN(InductiveNodePiece):
             assert (
                 validation_factory is not None and test_factory is not None
             ), "Validation and test factories must be triple factories"
-            self.register_buffer(name="validation_edge_index", tensor=validation_factory.mapped_triples[:, [0, 2]].t())
+            self.register_buffer(
+                name="validation_edge_index", tensor=get_edge_index(triples_factory=validation_factory)
+            )
             self.register_buffer(name="validation_edge_type", tensor=validation_factory.mapped_triples[:, 1])
-            self.register_buffer(name="testing_edge_index", tensor=test_factory.mapped_triples[:, [0, 2]].t())
+            self.register_buffer(name="testing_edge_index", tensor=get_edge_index(triples_factory=test_factory))
             self.register_buffer(name="testing_edge_type", tensor=test_factory.mapped_triples[:, 1])
 
     def reset_parameters_(self):
@@ -123,18 +120,15 @@ class InductiveRGCN(InductiveNodePiece):
         t: Optional[torch.LongTensor],
         mode: InductiveMode = None,
     ) -> Tuple[HeadRepresentation, RelationRepresentation, TailRepresentation]:
-        # TODO:
-        # First extract the entity representations and the relation representations from the first RoGCNLayer
-        # Then pass them through the CompGCN layers
+        """Get representations for head, relation and tails, in canonical shape with a GNN encoder."""
+        entity_representations = self._entity_representation_from_mode(mode=mode)
 
+        # Extract all entity and relation representations
+        x_e, x_r = entity_representations[0](), self.relation_representations[0]()
 
         edge_index = getattr(self, f"{mode}_edge_index")
         edge_type = getattr(self, f"{mode}_edge_type")
-        # print(f'h={h.shape},t={t.shape},r={r.shape}')
-        # Extract all entity and relation representations
-        # x_e, x_r = self.rogcn(self.num_entities, source=h,target=t,edge_type=r), self.rogcn.relation_representation() # Not sure about this
-        x_e, x_r = self.rogcn(self.num_entities, source=edge_index[0,:],target=edge_index[1,:],edge_type=edge_type), self.rogcn.relation_representation() # Not sure about this
-
+        
         # Perform message passing and get updated states
         for layer in self.rgcn_encoder:
             x_e = layer(
@@ -150,9 +144,6 @@ class InductiveRGCN(InductiveNodePiece):
                 edge_index=edge_index,
                 edge_type=edge_type,
             )
-        # print(h)
-        # print(x_e.shape)
-        # print(x_r.shape)
 
         # Use updated entity and relation states to extract requested IDs
         # TODO I got lost in all the Representation Modules and shape casting and wrote this ;(
@@ -162,6 +153,7 @@ class InductiveRGCN(InductiveNodePiece):
             x_r.index_select(dim=0, index=r) if r is not None else x_r,
             x_e.index_select(dim=0, index=t) if t is not None else x_e,
         ]
+
         # normalization
         return cast(
             Tuple[HeadRepresentation, RelationRepresentation, TailRepresentation],

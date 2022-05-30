@@ -133,7 +133,8 @@ def main(
     # but feel free to create and attach your own GNN encoder via the gnn_encoder argument
     # and new inductive link prediction models in general
 
-    model = InductiveRGCN(
+    model_cls = InductiveNodePieceGNN if gnn else InductiveRGCN
+    model = model_cls(
         embedding_dim=embedding_dim,
         triples_factory=dataset.transductive_training,
         inference_factory=dataset.inductive_inference,
